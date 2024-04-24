@@ -49,5 +49,5 @@ src/main/resources/export/outpatient_rev_cntr_code_map.json
 
 # VS Code plugin files
 .history
-/flexporter/
+/flexporter/output/
 .idea/
