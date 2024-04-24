@@ -7,31 +7,15 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.temporal.TemporalAmount;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Date;
-import java.util.HashSet;
-import java.util.Iterator;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.UUID;
+import java.util.*;
 import java.util.stream.Collectors;
 
 import org.apache.commons.lang3.StringUtils;
-import org.hl7.fhir.r4.model.Base;
-import org.hl7.fhir.r4.model.Bundle;
+import org.hl7.fhir.r4.model.*;
 import org.hl7.fhir.r4.model.Bundle.BundleEntryComponent;
 import org.hl7.fhir.r4.model.Bundle.BundleEntryRequestComponent;
 import org.hl7.fhir.r4.model.Bundle.BundleType;
 import org.hl7.fhir.r4.model.Bundle.HTTPVerb;
-import org.hl7.fhir.r4.model.DateTimeType;
-import org.hl7.fhir.r4.model.Encounter;
-import org.hl7.fhir.r4.model.Meta;
-import org.hl7.fhir.r4.model.Period;
-import org.hl7.fhir.r4.model.Reference;
-import org.hl7.fhir.r4.model.Resource;
 import org.mitre.synthea.engine.State;
 import org.mitre.synthea.export.FhirR4;
 import org.mitre.synthea.export.flexporter.FieldWrapper.DateFieldWrapper;
@@ -314,10 +298,10 @@ public abstract class Actions {
         // IMPORTANT: basedOnItem may be null
 
         Map<String, Object> fhirPathMapping =
-            createFhirPathMapping(fields, bundle, (Resource) basedOnItem, person, fjContext);
+                createFhirPathMapping(fields, bundle, (Resource) basedOnItem, person, fjContext);
 
         CustomFHIRPathResourceGeneratorR4<Resource> fhirPathgenerator =
-            new CustomFHIRPathResourceGeneratorR4<>();
+                new CustomFHIRPathResourceGeneratorR4<>();
         fhirPathgenerator.setMapping(fhirPathMapping);
 
         Resource createdResource = fhirPathgenerator.generateResource(resourceType);
@@ -787,6 +771,14 @@ public abstract class Actions {
       return getAttribute(person, flagValues);
     } else if (flag.equals("randomCode")) {
       return randomCode(flagValues[0]);
+    } else if (flag.equals("multiRandomCode")) {
+      return multiRandomCode(flagValues);
+    } else if (flag.equals("setValueField")){
+      return setValueField(currentResource, flagValues[0], Arrays.copyOfRange(flagValues, 1, flagValues.length));
+    } else if (flag.equals("setMedicationField")){
+      return setMedicationField(bundle, currentResource, flagValues[0], Arrays.copyOfRange(flagValues, 1, flagValues.length));
+    } else if (flag.equals("setHospitalization")){
+      return setHospitalization(currentResource, flagValues[0], Arrays.copyOfRange(flagValues, 1, flagValues.length));
     }
 
     return null;
@@ -867,10 +859,147 @@ public abstract class Actions {
   private static Map<String, String> randomCode(String valueSetUrl) {
     Code code = RandomCodeGenerator.getCode(valueSetUrl,
         (int) (Math.random() * Integer.MAX_VALUE));
-    Map<String, String> codeAsMap = Map.of(
-         "system", code.system,
-         "code", code.code,
-         "display", code.display);
-    return codeAsMap;
+    return Map.of(
+        "system", code.system,
+        "code", code.code,
+        "display", code.display);
+  }
+
+  static class utilities {
+    private static int count = 0;
+    public static int valuesetcount = 0;
+
+    public static CodeableConcept setCodeableConcept(String... data) {
+      CodeableConcept codeableConcept = new CodeableConcept();
+      Coding coding = new Coding();
+      String valueString = null;
+
+      synchronized(utilities.class) {
+        if (count < data.length) {
+          valueString = data[count++].strip();
+        } else {
+          valueString = data[0].strip();
+          count = 1;
+        }
+      }
+
+      if (valueString.contains(";")) {
+        String[] result = valueString.split(";");
+        coding.setSystem(result[0]).setCode(result[1]);
+      } else {
+        Code code = RandomCodeGenerator.getCode(valueString, (int) (Math.random() * Integer.MAX_VALUE));
+        assert code != null;
+        coding.setSystem(code.system).setCode(code.code).setDisplay(code.display);
+      }
+      return codeableConcept.addCoding(coding);
+    }
+
+    public static Quantity setQuantity(String... data) {
+      Quantity quantity = new Quantity();
+
+      if (data.length >= 1) {
+        try {
+          double value = Double.parseDouble(data[0].strip());
+          quantity.setValue(value);
+        } catch (NumberFormatException e) {
+          System.err.println("Error parsing value: " + data[0]);
+        }
+      }
+      if (data.length >= 2) {
+        quantity.setUnit(data[1].strip());
+      }
+      if (data.length >= 3) {
+        quantity.setSystem(data[2].strip());
+      }
+      if (data.length >= 4) {
+        quantity.setCode(data[3].strip());
+      }
+
+      return quantity;
+    }
+  }
+
+  private static Map<String, String> multiRandomCode(String... valueSetUrl) {
+    String urlString = null;
+
+    synchronized(utilities.class) {
+      if (utilities.valuesetcount < valueSetUrl.length) {
+        urlString = valueSetUrl[utilities.valuesetcount++].strip();
+      } else {
+        urlString = valueSetUrl[0].strip();
+        utilities.valuesetcount = 1;
+      }
+    }
+    Code code = new Code("", "", "");
+
+    if (urlString.contains(";")) {
+      String[] data = urlString.split(";");
+      if (data.length == 2) {
+        code = new Code(data[0], data[1], "");
+      } else if (data.length == 3) {
+        code = new Code(data[0], data[1], data[2]);
+      }
+    } else {
+      code = RandomCodeGenerator.getCode(urlString, (int) (Math.random() * Integer.MAX_VALUE));
+    }
+    assert code != null;
+    return Map.of(
+            "system", code.system,
+            "code", code.code,
+            "display", code.display);
+  }
+
+  private static Resource setValueField(Resource currentResource, String field, String... values) {
+    switch (field) {
+      case "valueQuantity":
+        currentResource.setProperty("value[x]", utilities.setQuantity(values));
+        break;
+      case "valueCodeableConcept":
+        currentResource.setProperty("value[x]", utilities.setCodeableConcept(values));
+        break;
+      case "valueString":
+        StringType str = new StringType(values[0].strip());
+        currentResource.setProperty("value[x]", str);
+        break;
+      case "valueBoolean":
+        BooleanType bool = new BooleanType(values[0].strip());
+        currentResource.setProperty("value[x]", bool);
+        break;
+      case "valueInteger":
+        IntegerType integer = new IntegerType(values[0].strip());
+        currentResource.setProperty("value[x]", integer);
+        break;
+      case "valueDateTime":
+        DateTimeType datetime = new DateTimeType(values[0].strip());
+        currentResource.setProperty("value[x]", datetime);
+        break;
+    }
+    return currentResource;
+  }
+
+  private static Resource setMedicationField(Bundle bundle, Resource currentResource, String field, String... values) {
+    switch (field) {
+      case "medicationCodeableConcept":
+        currentResource.setProperty("medication[x]", utilities.setCodeableConcept(values));
+        break;
+      case "medicationReference":
+        currentResource.setProperty("medication[x]", new Reference().setReference(findReference(bundle, "Medication")));
+        break;
+    }
+    return currentResource;
+  }
+
+  private static Resource setHospitalization(Resource currentResource, String field, String... values) {
+    Encounter.EncounterHospitalizationComponent hospitalization = new Encounter.EncounterHospitalizationComponent();
+    switch (field) {
+      case "dischargeDisposition":
+        hospitalization.setDischargeDisposition(utilities.setCodeableConcept(values));
+        break;
+      case "admitSource":
+        hospitalization.setAdmitSource(utilities.setCodeableConcept(values));
+        break;
+    }
+    currentResource.setProperty("hospitalization", hospitalization);
+    return currentResource;
   }
 }
