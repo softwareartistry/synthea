@@ -927,7 +927,7 @@ public abstract class Actions {
   }
 
   private static Resource setValueField(Resource currentResource,Integer index, String field, String... values) {
-    switch (field) {
+    switch (field.strip()) {
       case "valueQuantity":
         currentResource.setProperty("value[x]", utilities.setQuantity(values[index].split(";")));
         break;
@@ -955,7 +955,7 @@ public abstract class Actions {
   }
 
   private static Resource setMedicationField(Bundle bundle, Resource currentResource, int index, String field, String... values) {
-    switch (field) {
+    switch (field.strip()) {
       case "medicationCodeableConcept":
         currentResource.setProperty("medication[x]", utilities.codeableConcept(index, values));
         break;
@@ -970,7 +970,7 @@ public abstract class Actions {
   private static Resource setHospitalization(Resource currentResource, int index, String field, String... values) {
     Encounter.EncounterHospitalizationComponent hospitalization = new Encounter.EncounterHospitalizationComponent();
     CodeableConcept codeableConcept = utilities.codeableConcept(index, values);
-    switch (field) {
+    switch (field.strip()) {
       case "dischargeDisposition":
         hospitalization.setDischargeDisposition(codeableConcept);
         break;
