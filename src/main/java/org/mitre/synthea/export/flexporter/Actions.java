@@ -2,6 +2,7 @@ package org.mitre.synthea.export.flexporter;
 
 import ca.uhn.fhir.parser.IParser;
 
+import java.sql.Ref;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -9,6 +10,7 @@ import java.time.ZoneOffset;
 import java.time.temporal.TemporalAmount;
 import java.util.*;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import org.apache.commons.lang3.StringUtils;
 import org.hl7.fhir.r4.model.*;
@@ -44,7 +46,7 @@ public abstract class Actions {
    *      Important: in many cases it will be the same Bundle object as passed in, but not always!
    */
   public static Bundle applyMapping(Bundle bundle, Mapping mapping, Person person,
-      FlexporterJavascriptContext fjContext) {
+                                    FlexporterJavascriptContext fjContext) {
 
     for (Map<String, Object> action : mapping.actions) {
       bundle = applyAction(bundle, action, person, fjContext);
@@ -64,7 +66,7 @@ public abstract class Actions {
    *      Important: in many cases it will be the same Bundle object as passed in, but not always!
    */
   public static Bundle applyAction(Bundle bundle, Map<String, Object> action, Person person,
-      FlexporterJavascriptContext fjContext) {
+                                   FlexporterJavascriptContext fjContext) {
     // TODO: this could be handled better but for now just key off a specific field in the action
 
     Bundle returnBundle = bundle;
@@ -84,7 +86,7 @@ public abstract class Actions {
 
     } else if (action.containsKey("create_resource")) {
       createResource(bundle, (List<Map<String, Object>>) action.get("create_resource"), person,
-          null);
+              null);
 
     } else if (action.containsKey("min_date") || action.containsKey("max_date")) {
       dateFilter(bundle, (String)action.get("min_date"), (String)action.get("max_date"));
@@ -94,7 +96,7 @@ public abstract class Actions {
 
     } else if (action.containsKey("execute_script")) {
       returnBundle = executeScript((List<Map<String, String>>) action.get("execute_script"), bundle,
-          fjContext);
+              fjContext);
     }
 
     return returnBundle;
@@ -156,7 +158,7 @@ public abstract class Actions {
    * @param fjContext Javascript context for this run
    */
   public static void setValues(Bundle bundle, List<Map<String, Object>> items, Person person,
-      FlexporterJavascriptContext fjContext) {
+                               FlexporterJavascriptContext fjContext) {
     for (Map<String, Object> entry : items) {
       String applicability = (String) entry.get("applicability");
       List<Map<String, Object>> fields = (List<Map<String, Object>>) entry.get("fields");
@@ -166,10 +168,10 @@ public abstract class Actions {
       for (Base match : matchingResources) {
         if (match instanceof Resource) {
           Map<String, Object> fhirPathMapping =
-              createFhirPathMapping(fields, bundle, (Resource) match, person, fjContext);
+                  createFhirPathMapping(fields, bundle, (Resource) match, person, fjContext);
 
           CustomFHIRPathResourceGeneratorR4<Resource> fhirPathgenerator =
-              new CustomFHIRPathResourceGeneratorR4<>();
+                  new CustomFHIRPathResourceGeneratorR4<>();
           fhirPathgenerator.setMapping(fhirPathMapping);
           fhirPathgenerator.setResource((Resource) match);
 
@@ -192,7 +194,7 @@ public abstract class Actions {
    * @param fjContext Javascript context for this run
    */
   public static void createResource(Bundle bundle, List<Map<String, Object>> resourcesToCreate,
-      Person person, FlexporterJavascriptContext fjContext) {
+                                    Person person, FlexporterJavascriptContext fjContext) {
     // TODO: this is fundamentally similar to setValues, so extract common logic
 
     for (Map<String, Object> newResourceDef : resourcesToCreate) {
@@ -232,8 +234,8 @@ public abstract class Actions {
         }
         final String basedOnStateName = basedOnState; // java weirdness
         List<State> instances = moduleHistory.stream()
-            .filter(s -> s.name.equals(basedOnStateName))
-            .collect(Collectors.toList());
+                .filter(s -> s.name.equals(basedOnStateName))
+                .collect(Collectors.toList());
 
         basedOnResources = new ArrayList<>();
 
@@ -277,8 +279,8 @@ public abstract class Actions {
               String value = (String) valueDef;
               if (value.contains("State.")) {
                 value = value
-                    .replace("State.entered", "Encounter.period.start")
-                    .replace("State.exited", "Encounter.period.end");
+                        .replace("State.entered", "Encounter.period.start")
+                        .replace("State.exited", "Encounter.period.end");
 
                 field.put("value", value);
               }
@@ -330,10 +332,10 @@ public abstract class Actions {
 
         if (writeback != null && !writeback.isEmpty()) {
           Map<String, Object> writebackMapping =
-              createFhirPathMapping(writeback, bundle, createdResource, person, fjContext);
+                  createFhirPathMapping(writeback, bundle, createdResource, person, fjContext);
 
           CustomFHIRPathResourceGeneratorR4<Resource> writebackGenerator =
-              new CustomFHIRPathResourceGeneratorR4<>();
+                  new CustomFHIRPathResourceGeneratorR4<>();
           writebackGenerator.setMapping(writebackMapping);
           writebackGenerator.setResource((Resource) basedOnItem);
 
@@ -364,7 +366,7 @@ public abstract class Actions {
 
     } else if (state.entered != null) {
       LocalDateTime stateEntered =
-          Instant.ofEpochMilli(state.entered).atOffset(ZoneOffset.UTC).toLocalDateTime();
+              Instant.ofEpochMilli(state.entered).atOffset(ZoneOffset.UTC).toLocalDateTime();
 
       for (BundleEntryComponent entry : bundle.getEntry())  {
         Resource r = entry.getResource();
@@ -385,7 +387,7 @@ public abstract class Actions {
           } else {
             LocalDateTime encEnd = endDt.toInstant().atOffset(ZoneOffset.UTC).toLocalDateTime();
             if ((stateEntered.isAfter(encStart) || stateEntered.isEqual(encStart))
-                && (stateEntered.isBefore(encEnd) || stateEntered.isEqual(encEnd))) {
+                    && (stateEntered.isBefore(encEnd) || stateEntered.isEqual(encEnd))) {
               encounterAtThatState = (Encounter) r;
               break;
             }
@@ -398,8 +400,8 @@ public abstract class Actions {
 
 
   private static Map<String, Object> createFhirPathMapping(List<Map<String, Object>> fields,
-      Bundle sourceBundle, Resource sourceResource, Person person,
-      FlexporterJavascriptContext fjContext) {
+                                                           Bundle sourceBundle, Resource sourceResource, Person person,
+                                                           FlexporterJavascriptContext fjContext) {
 
     // linked hashmap to ensure lists are kept in order. could also use something like a treemap
     Map<String, Object> fhirPathMapping = new LinkedHashMap<>();
@@ -458,7 +460,7 @@ public abstract class Actions {
   }
 
   private static void populateFhirPathMapping(Map<String, Object> fhirPathMapping, String basePath,
-      Map<String, Object> valueMap) {
+                                              Map<String, Object> valueMap) {
     for (Map.Entry<String,Object> entry : valueMap.entrySet()) {
       String key = entry.getKey();
       Object value = entry.getValue();
@@ -475,13 +477,13 @@ public abstract class Actions {
         populateFhirPathMapping(fhirPathMapping, path, (List<Object>) value);
       } else if (value != null) {
         System.err
-            .println("Unexpected class found in populateFhirPathMapping[map]: " + value.getClass());
+                .println("Unexpected class found in populateFhirPathMapping[map]: " + value.getClass());
       }
     }
   }
 
   private static void populateFhirPathMapping(Map<String, Object> fhirPathMapping, String basePath,
-      List<Object> valueList) {
+                                              List<Object> valueList) {
     for (int i = 0; i < valueList.size(); i++) {
       Object value = valueList.get(i);
 
@@ -497,7 +499,7 @@ public abstract class Actions {
         populateFhirPathMapping(fhirPathMapping, path, (List<Object>) value);
       } else if (value != null) {
         System.err
-            .println("Unexpected class found in populateFhirPathMapping[list]:" + value.getClass());
+                .println("Unexpected class found in populateFhirPathMapping[list]:" + value.getClass());
       }
     }
   }
@@ -561,7 +563,7 @@ public abstract class Actions {
     for (BundleEntryComponent entry : bundle.getEntry()) {
       Resource resource = entry.getResource();
       List<DateFieldWrapper> dateFieldsOnResource =
-          FieldWrapper.DATE_FIELDS.get(resource.getResourceType());
+              FieldWrapper.DATE_FIELDS.get(resource.getResourceType());
       if (dateFieldsOnResource == null) {
         continue;
       }
@@ -606,7 +608,7 @@ public abstract class Actions {
 
       Resource resource = entry.getResource();
       List<DateFieldWrapper> dateFieldsOnResource =
-          FieldWrapper.DATE_FIELDS.get(resource.getResourceType());
+              FieldWrapper.DATE_FIELDS.get(resource.getResourceType());
 
       if (dateFieldsOnResource == null) {
         continue;
@@ -672,7 +674,7 @@ public abstract class Actions {
       Resource resource = entry.getResource();
 
       List<ReferenceFieldWrapper> references =
-          FieldWrapper.REFERENCE_FIELDS.get(resource.getResourceType());
+              FieldWrapper.REFERENCE_FIELDS.get(resource.getResourceType());
 
       if (references == null) {
         continue;
@@ -713,7 +715,7 @@ public abstract class Actions {
    *     not modify the existing one in-place.
    */
   public static Bundle executeScript(List<Map<String, String>> scripts, Bundle bundle,
-      FlexporterJavascriptContext fjContext) {
+                                     FlexporterJavascriptContext fjContext) {
     IParser parser = FhirR4.getContext().newJsonParser();
 
     String bundleJson = parser.encodeResourceToString(bundle);
@@ -735,7 +737,7 @@ public abstract class Actions {
         fjContext.applyFunctionToResources(functionName, resourceType);
       } else {
         throw new IllegalArgumentException("Unknown option for execute_script.apply_to: '" + applyTo
-            + "'. Valid options are 'bundle' and 'resources'");
+                + "'. Valid options are 'bundle' and 'resources'");
       }
     }
 
@@ -748,7 +750,7 @@ public abstract class Actions {
 
 
   private static Object getValue(Bundle bundle, String valueDef, Resource currentResource,
-      Person person, FlexporterJavascriptContext fjContext) {
+                                 Person person, FlexporterJavascriptContext fjContext) {
     // The flag has the format of $flagName([flagValue1, flagValue2, ..., flagValueN])
 
     String flag = StringUtils.substringBetween(valueDef, "$", "(");
@@ -772,13 +774,17 @@ public abstract class Actions {
     } else if (flag.equals("randomCode")) {
       return randomCode(flagValues[0]);
     } else if (flag.equals("multiRandomCode")) {
-      return multiRandomCode(flagValues);
+      long len = bundle.getEntry().stream().takeWhile(entry -> !currentResource.getId().equals(entry.getResource().getId())).filter(entry -> entry.getResource().getResourceType().toString().equals(currentResource.getResourceType().toString())).count();
+      return multiRandomCode((int) len%flagValues.length, flagValues);
     } else if (flag.equals("setValueField")){
-      return setValueField(currentResource, flagValues[0], Arrays.copyOfRange(flagValues, 1, flagValues.length));
+      long len = bundle.getEntry().stream().takeWhile(entry -> !currentResource.getId().equals(entry.getResource().getId())).filter(entry -> entry.getResource().getResourceType().toString().equals(currentResource.getResourceType().toString())).count();
+      return setValueField(currentResource, flagValues.length == 2 ? 0 : (int) len%(flagValues.length-1), flagValues[0], Arrays.copyOfRange(flagValues, 1, flagValues.length));
     } else if (flag.equals("setMedicationField")){
-      return setMedicationField(bundle, currentResource, flagValues[0], Arrays.copyOfRange(flagValues, 1, flagValues.length));
+      long len = bundle.getEntry().stream().takeWhile(entry -> !currentResource.getId().equals(entry.getResource().getId())).filter(entry -> entry.getResource().getResourceType().toString().equals(currentResource.getResourceType().toString())).count();
+      return setMedicationField(bundle, currentResource, flagValues.length == 2 ? 0 : (int) len%(flagValues.length-1), flagValues[0], Arrays.copyOfRange(flagValues, 1, flagValues.length));
     } else if (flag.equals("setHospitalization")){
-      return setHospitalization(currentResource, flagValues[0], Arrays.copyOfRange(flagValues, 1, flagValues.length));
+      long len = bundle.getEntry().stream().takeWhile(entry -> !currentResource.getId().equals(entry.getResource().getId())).filter(entry -> entry.getResource().getResourceType().toString().equals(currentResource.getResourceType().toString())).count();
+      return setHospitalization(currentResource, flagValues.length == 2 ? 0 : (int) len%(flagValues.length-1), flagValues[0], Arrays.copyOfRange(flagValues, 1, flagValues.length));
     }
 
     return null;
@@ -815,7 +821,7 @@ public abstract class Actions {
   }
 
   private static Object getField(Resource currentResource, FlexporterJavascriptContext fjContext,
-      String... args) {
+                                 String... args) {
     // args[0] = FHIRPath, from this resource
     // args[1] = how to disambiguate if there are multiple? TODO
 
@@ -857,44 +863,30 @@ public abstract class Actions {
   }
 
   private static Map<String, String> randomCode(String valueSetUrl) {
-    Code code = RandomCodeGenerator.getCode(valueSetUrl,
-        (int) (Math.random() * Integer.MAX_VALUE));
+    Code code = RandomCodeGenerator.getCode(valueSetUrl, (int) (Math.random() * Integer.MAX_VALUE));
     return Map.of(
-        "system", code.system,
-        "code", code.code,
-        "display", code.display);
+            "system", code.system,
+            "code", code.code,
+            "display", code.display);
   }
 
-  static class utilities {
-    private static int count = 0;
-    public static int valuesetcount = 0;
-
-    public static CodeableConcept setCodeableConcept(String... data) {
+  private static class utilities {
+    static CodeableConcept codeableConcept(int index, String... values) {
       CodeableConcept codeableConcept = new CodeableConcept();
-      Coding coding = new Coding();
-      String valueString = null;
-
-      synchronized(utilities.class) {
-        if (count < data.length) {
-          valueString = data[count++].strip();
-        } else {
-          valueString = data[0].strip();
-          count = 1;
-        }
-      }
-
-      if (valueString.contains(";")) {
-        String[] result = valueString.split(";");
-        coding.setSystem(result[0]).setCode(result[1]);
-      } else {
-        Code code = RandomCodeGenerator.getCode(valueString, (int) (Math.random() * Integer.MAX_VALUE));
-        assert code != null;
-        coding.setSystem(code.system).setCode(code.code).setDisplay(code.display);
-      }
-      return codeableConcept.addCoding(coding);
+      Map<String, String> data = multiRandomCode(index, values);
+      codeableConcept.addCoding(new Coding().setCode(data.get("code")).setSystem(data.get("system")).setDisplay(data.get("display")));
+      return codeableConcept;
     }
 
-    public static Quantity setQuantity(String... data) {
+    static Reference reference(Bundle bundle, String value) {
+      Reference reference = new Reference();
+      List<String> ids = bundle.getEntry().stream().filter(ent-> ent.getResource().getResourceType().toString().equals(value)).map(ent-> ent.getResource().getId()).collect(Collectors.toList());
+      int randomIndex = new Random().nextInt(ids.size());
+      reference.setReference(ids.get(randomIndex));
+      return reference;
+    }
+
+    static Quantity setQuantity(String... data) {
       Quantity quantity = new Quantity();
 
       if (data.length >= 1) {
@@ -905,39 +897,24 @@ public abstract class Actions {
           System.err.println("Error parsing value: " + data[0]);
         }
       }
-      if (data.length >= 2) {
-        quantity.setUnit(data[1].strip());
-      }
-      if (data.length >= 3) {
-        quantity.setSystem(data[2].strip());
-      }
-      if (data.length >= 4) {
-        quantity.setCode(data[3].strip());
-      }
+      quantity.setUnit(data.length >= 2 ? data[1].strip(): null)
+              .setUnit(data.length >= 3 ? data[2].strip(): null)
+              .setUnit(data.length >= 4 ? data[3].strip(): null);
 
       return quantity;
     }
   }
 
-  private static Map<String, String> multiRandomCode(String... valueSetUrl) {
-    String urlString = null;
+  private static Map<String, String> multiRandomCode(int index, String... valueSetUrl) {
 
-    synchronized(utilities.class) {
-      if (utilities.valuesetcount < valueSetUrl.length) {
-        urlString = valueSetUrl[utilities.valuesetcount++].strip();
-      } else {
-        urlString = valueSetUrl[0].strip();
-        utilities.valuesetcount = 1;
-      }
-    }
+    String urlString = valueSetUrl[index < valueSetUrl.length ? index : 0].strip();
+
     Code code = new Code("", "", "");
 
     if (urlString.contains(";")) {
       String[] data = urlString.split(";");
-      if (data.length == 2) {
-        code = new Code(data[0], data[1], "");
-      } else if (data.length == 3) {
-        code = new Code(data[0], data[1], data[2]);
+      if (data.length >= 2 && data.length <= 3) {
+        code = new Code(data[0], data[1], data.length == 3 ? data[2] : "");
       }
     } else {
       code = RandomCodeGenerator.getCode(urlString, (int) (Math.random() * Integer.MAX_VALUE));
@@ -949,13 +926,13 @@ public abstract class Actions {
             "display", code.display);
   }
 
-  private static Resource setValueField(Resource currentResource, String field, String... values) {
+  private static Resource setValueField(Resource currentResource,Integer index, String field, String... values) {
     switch (field) {
       case "valueQuantity":
-        currentResource.setProperty("value[x]", utilities.setQuantity(values));
+        currentResource.setProperty("value[x]", utilities.setQuantity(values[index].split(";")));
         break;
       case "valueCodeableConcept":
-        currentResource.setProperty("value[x]", utilities.setCodeableConcept(values));
+        currentResource.setProperty("value[x]", utilities.codeableConcept(index, values));
         break;
       case "valueString":
         StringType str = new StringType(values[0].strip());
@@ -977,26 +954,28 @@ public abstract class Actions {
     return currentResource;
   }
 
-  private static Resource setMedicationField(Bundle bundle, Resource currentResource, String field, String... values) {
+  private static Resource setMedicationField(Bundle bundle, Resource currentResource, int index, String field, String... values) {
     switch (field) {
       case "medicationCodeableConcept":
-        currentResource.setProperty("medication[x]", utilities.setCodeableConcept(values));
+        currentResource.setProperty("medication[x]", utilities.codeableConcept(index, values));
         break;
       case "medicationReference":
+//        currentResource.setProperty("medication[x]", utilities.reference(bundle, values[index].strip()));
         currentResource.setProperty("medication[x]", new Reference().setReference(findReference(bundle, "Medication")));
         break;
     }
     return currentResource;
   }
 
-  private static Resource setHospitalization(Resource currentResource, String field, String... values) {
+  private static Resource setHospitalization(Resource currentResource, int index, String field, String... values) {
     Encounter.EncounterHospitalizationComponent hospitalization = new Encounter.EncounterHospitalizationComponent();
+    CodeableConcept codeableConcept = utilities.codeableConcept(index, values);
     switch (field) {
       case "dischargeDisposition":
-        hospitalization.setDischargeDisposition(utilities.setCodeableConcept(values));
+        hospitalization.setDischargeDisposition(codeableConcept);
         break;
       case "admitSource":
-        hospitalization.setAdmitSource(utilities.setCodeableConcept(values));
+        hospitalization.setAdmitSource(codeableConcept);
         break;
     }
     currentResource.setProperty("hospitalization", hospitalization);
