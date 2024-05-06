@@ -897,9 +897,16 @@ public abstract class Actions {
           System.err.println("Error parsing value: " + data[0]);
         }
       }
-      quantity.setUnit(data.length >= 2 ? data[1].strip(): null)
-              .setUnit(data.length >= 3 ? data[2].strip(): null)
-              .setUnit(data.length >= 4 ? data[3].strip(): null);
+
+      if (data.length >= 2) {
+        quantity.setUnit(data[1].strip());
+      }
+      if (data.length >= 3) {
+        quantity.setSystem(data[2].strip());
+      }
+      if (data.length >= 4) {
+        quantity.setCode(data[3].strip());
+      }
 
       return quantity;
     }
