@@ -863,7 +863,7 @@ public abstract class Actions {
   }
 
   private static Map<String, String> randomCode(String valueSetUrl) {
-    Code code = RandomCodeGenerator.getCode(valueSetUrl, (int) (Math.random() * Integer.MAX_VALUE));
+    Code code = RandomCodeGenerator.getCode(valueSetUrl.strip(), (int) (Math.random() * Integer.MAX_VALUE));
     return Map.of(
             "system", code.system,
             "code", code.code,
