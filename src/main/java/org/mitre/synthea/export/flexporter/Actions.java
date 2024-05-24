@@ -81,6 +81,9 @@ public abstract class Actions {
     } else if (action.containsKey("keep_resources")) {
       keepResources(bundle, (List<String>) action.get("keep_resources"));
 
+    } else if (action.containsKey("keep_count_resources")) {
+      keepSpecificResources(bundle, (List<String>) action.get("keep_count_resources"));
+
     } else if (action.containsKey("delete_resources")) {
       deleteResources(bundle, (List<String>) action.get("delete_resources"));
 
@@ -525,6 +528,48 @@ public abstract class Actions {
       Resource resource = entry.getResource();
       String resourceType = resource.getResourceType().toString();
       if (!resourceTypesToKeep.contains(resourceType)) {
+        deletedResourceIDs.add(resource.getId());
+        itr.remove();
+      }
+    }
+
+    if (!deletedResourceIDs.isEmpty()) {
+      pruneDeletedResources(bundle, deletedResourceIDs);
+    }
+  }
+
+
+  private static void keepSpecificResources(Bundle bundle, List<String> list) {
+    // TODO: make this FHIRPath instead of just straight resource types
+
+    Map<String, Integer> resourceTypesToKeep = new HashMap<>();
+
+    for (String entry : list) {
+      String[] parts = entry.split(",");
+      String key = parts[0].trim();
+      if (parts.length == 2) {
+        Integer value = Integer.parseInt(parts[1].trim());
+        resourceTypesToKeep.put(key, value);
+      } else {
+        resourceTypesToKeep.put(key, 1);
+      }
+    }
+
+    Set<String> deletedResourceIDs = new HashSet<>();
+
+    Iterator<BundleEntryComponent> itr = bundle.getEntry().iterator();
+
+    while (itr.hasNext()) {
+      BundleEntryComponent entry = itr.next();
+
+      Resource resource = entry.getResource();
+      String resourceType = resource.getResourceType().toString();
+      if (!resourceTypesToKeep.containsKey(resourceType)) {
+        deletedResourceIDs.add(resource.getId());
+        itr.remove();
+      } else if (resourceTypesToKeep.containsKey(resourceType) && resourceTypesToKeep.get(resourceType) > 0) {
+        resourceTypesToKeep.put(resourceType, resourceTypesToKeep.get(resourceType) - 1);
+      } else {
         deletedResourceIDs.add(resource.getId());
         itr.remove();
       }
