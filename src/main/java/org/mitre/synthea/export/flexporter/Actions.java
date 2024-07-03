@@ -2,17 +2,18 @@ package org.mitre.synthea.export.flexporter;
 
 import ca.uhn.fhir.parser.IParser;
 
-import java.sql.Ref;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.temporal.TemporalAmount;
 import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 import org.apache.commons.lang3.StringUtils;
+import org.apache.commons.validator.routines.UrlValidator;
 import org.hl7.fhir.r4.model.*;
 import org.hl7.fhir.r4.model.Bundle.BundleEntryComponent;
 import org.hl7.fhir.r4.model.Bundle.BundleEntryRequestComponent;
@@ -36,6 +37,38 @@ import org.mitre.synthea.world.concepts.HealthRecord.Code;
 public abstract class Actions {
 
   /**
+   * A variable to Store the valuesets data to be used within the code.
+   */
+  private static final Map<String, List<String>> valuesetMapping = new HashMap<>();
+  private static final UrlValidator urlValidator = new UrlValidator(UrlValidator.ALLOW_2_SLASHES);
+
+  /**
+   * Check for the patient count within the given range.
+   * @param index Current Patient Index
+   * @param range Start and End of the patients index
+   * @return Whether the provided index is within the given range
+   **/
+  public static boolean isWithinRange(int index, String[] range) {
+    if (range.length < 2 || range[0].isEmpty() || range[1].isEmpty()) {
+      throw new RuntimeException("count: "+ String.join("-", range) +". The count value must be in the format of '<start>-<end>'");
+    }
+    return index >= Integer.parseInt(range[0]) && index <= Integer.parseInt(range[1]);
+  }
+
+  /**
+   * Store the provided valuesets into valuesetMapping variable.
+   * @param valuesets List of Dictionary with Valueset Tag, ValuesetOID or code, system
+   */
+  public static synchronized void loadValueSet(Map<String, String> valuesets) {
+    if (valuesetMapping.isEmpty() && valuesets != null) {
+      valuesets.forEach((key, value) ->
+              valuesetMapping.computeIfAbsent(key, k -> List.of(value.split(";")))
+      );
+      System.out.println("Loading the valueset table.");
+    }
+  }
+
+  /**
    * Apply the given Mapping to the provided Bundle.
    * @param bundle FHIR bundle
    * @param mapping Flexporter mapping
@@ -50,6 +83,29 @@ public abstract class Actions {
 
     for (Map<String, Object> action : mapping.actions) {
       bundle = applyAction(bundle, action, person, fjContext);
+    }
+
+    return bundle;
+  }
+
+  /**
+   * Apply the given Mapping to the provided Bundle.
+   * @param bundle FHIR bundle
+   * @param mapping Flexporter mapping
+   * @param person Synthea Person object that was used to create the Bundle.
+   *     This will be null if running the flexporter standalone from the run_flexporter task.
+   * @param fjContext Flexporter Javascript Context associated with this run
+   * @param index Index of current Patient.
+   * @return the Bundle after all transformations have been applied.
+   *      Important: in many cases it will be the same Bundle object as passed in, but not always!
+   */
+  public static Bundle applyMapping(Bundle bundle, Mapping mapping, Person person,
+                                    FlexporterJavascriptContext fjContext, int index) {
+
+    loadValueSet(mapping.valuesets);
+
+    for (Map<String, Object> action : mapping.actions) {
+      bundle = applyAction(bundle, action, person, fjContext, index);
     }
 
     return bundle;
@@ -105,6 +161,57 @@ public abstract class Actions {
     return returnBundle;
   }
 
+
+  /**
+   * Apply the given single Action to the provided Bundle.
+   * @param bundle FHIR bundle
+   * @param action Flexporter action
+   * @param person Synthea Person object that was used to create the Bundle.
+   *     This will be null if running the flexporter standalone from the run_flexporter task.
+   * @param fjContext Flexporter Javascript Context associated with this run
+   * @param index Patient Count.
+   * @return the Bundle after the transformation has been applied.
+   *      Important: in many cases it will be the same Bundle object as passed in, but not always!
+   */
+  public static Bundle applyAction(Bundle bundle, Map<String, Object> action, Person person,
+                                   FlexporterJavascriptContext fjContext, int index) {
+    // TODO: this could be handled better but for now just key off a specific field in the action
+
+    Bundle returnBundle = bundle;
+    // most actions modify the bundle in-place, but some might return a whole new one
+
+    if (action.containsKey("profiles")) {
+      applyProfiles(bundle, (List<Map<String, String>>) action.get("profiles"));
+
+    } else if (action.containsKey("set_values")) {
+      setValues(bundle, (List<Map<String, Object>>) action.get("set_values"), person, fjContext);
+
+    } else if (action.containsKey("keep_resources")) {
+      keepResources(bundle, (List<String>) action.get("keep_resources"));
+
+    } else if (action.containsKey("keep_count_resources")) {
+      keepSpecificResources(bundle, (List<String>) action.get("keep_count_resources"));
+
+    } else if (action.containsKey("delete_resources")) {
+      deleteResources(bundle, (List<String>) action.get("delete_resources"));
+
+    } else if (action.containsKey("create_resource")) {
+      createResource(bundle, (List<Map<String, Object>>) action.get("create_resource"), person,
+              null, index);
+
+    } else if (action.containsKey("min_date") || action.containsKey("max_date")) {
+      dateFilter(bundle, (String)action.get("min_date"), (String)action.get("max_date"));
+
+    } else if (action.containsKey("shift_dates")) {
+      shiftDates(bundle, (String)action.get("shift_dates"));
+
+    } else if (action.containsKey("execute_script")) {
+      returnBundle = executeScript((List<Map<String, String>>) action.get("execute_script"), bundle,
+              fjContext);
+    }
+
+    return returnBundle;
+  }
 
   /**
    * Apply a profile to resources matching certain rules. Note this only adds the profile URL to
@@ -212,6 +319,182 @@ public abstract class Actions {
         basedOnPath = (String) basedOn.get("resource");
         basedOnState = (String) basedOn.get("state");
         basedOnModule = (String) basedOn.get("module");
+      }
+
+      List<String> profiles = (List<String>) newResourceDef.get("profiles");
+      List<Map<String, Object>> fields = (List<Map<String, Object>>) newResourceDef.get("fields");
+
+      List<Base> basedOnResources;
+      List<Map<String, Object>> writeback;
+
+      if (basedOnPath != null) {
+        basedOnResources = FhirPathUtils.evaluateBundle(bundle, basedOnPath, true);
+        // this may return empty list, in which no new resources will be created
+
+        writeback = (List<Map<String, Object>>) newResourceDef.get("writeback");
+
+      } else if (basedOnState != null && basedOnModule != null) {
+        String moduleKey = String.format("%s Module", basedOnModule);
+        List<State> moduleHistory = (List<State>)person.attributes.get(moduleKey);
+
+        if (moduleHistory == null) {
+
+          // TODO - maybe throw an exception?
+          return;
+        }
+        final String basedOnStateName = basedOnState; // java weirdness
+        List<State> instances = moduleHistory.stream()
+                .filter(s -> s.name.equals(basedOnStateName))
+                .collect(Collectors.toList());
+
+        basedOnResources = new ArrayList<>();
+
+        for (State instance : instances) {
+          Long entered = instance.entered;
+          Long exited = instance.exited;
+
+          // map these to a FHIR type so that we can re-use the existing concepts
+
+          // TODO: not sure Encounter is the best but it gives us a Period
+          //  and a reference to another encounter.
+          // Parameters could also work if we want more generic things,
+          //  but the FHIRPath to retrieve from it is ugly
+          Encounter dummyEncounter = new Encounter();
+          Period period = new Period();
+          if (entered != null) {
+            period.setStartElement(new DateTimeType(new Date(entered)));
+          }
+          if (exited != null) {
+            period.setEndElement(new DateTimeType(new Date(exited)));
+          }
+          dummyEncounter.setPeriod(period);
+
+          Encounter encounterAtThatState = findEncounterAtState(instance, bundle);
+          if (encounterAtThatState != null) {
+            dummyEncounter.setPartOf(new Reference("urn:uuid:" + encounterAtThatState.getId()));
+            dummyEncounter.setParticipant(encounterAtThatState.getParticipant());
+            // TODO: copy any other fields over?
+          }
+
+          basedOnResources.add(dummyEncounter);
+        }
+
+        if (!basedOnResources.isEmpty()) {
+          // rewrite "State.entered" to "Encounter.period.start", etc
+          // so that the end user doesn't have to know we used an Encounter
+
+          for (Map<String, Object> field : fields) {
+            Object valueDef = field.get("value");
+            if (valueDef instanceof String && ((String) valueDef).startsWith("$")) {
+              String value = (String) valueDef;
+              if (value.contains("State.")) {
+                value = value
+                        .replace("State.entered", "Encounter.period.start")
+                        .replace("State.exited", "Encounter.period.end");
+
+                field.put("value", value);
+              }
+            }
+          }
+
+        }
+
+        writeback = null;
+      } else {
+        basedOnResources = Collections.singletonList(null);
+        writeback = null;
+      }
+
+
+      for (Base basedOnItem : basedOnResources) {
+        // IMPORTANT: basedOnItem may be null
+
+        Map<String, Object> fhirPathMapping =
+                createFhirPathMapping(fields, bundle, (Resource) basedOnItem, person, fjContext);
+
+        CustomFHIRPathResourceGeneratorR4<Resource> fhirPathgenerator =
+                new CustomFHIRPathResourceGeneratorR4<>();
+        fhirPathgenerator.setMapping(fhirPathMapping);
+
+        Resource createdResource = fhirPathgenerator.generateResource(resourceType);
+
+        // ensure the new resource has an ID
+        // seems like this should work as part of the fhirpathgenerator, but it didn't
+        // this might be easier anyway
+        createdResource.setId(UUID.randomUUID().toString());
+        // TODO: consistent UUIDs
+        if (profiles != null) {
+          profiles.forEach(p -> applyProfile(createdResource, p));
+        }
+
+        // TODO: see if there's a good way to add the resource after the based-on resource
+        BundleEntryComponent newEntry = bundle.addEntry();
+
+        newEntry.setResource(createdResource);
+        newEntry.setFullUrl("urn:uuid:" + createdResource.getId());
+
+        if (bundle.getType().equals(BundleType.TRANSACTION)) {
+          BundleEntryRequestComponent request = newEntry.getRequest();
+          // as of now everything in synthea is POST to resourceType.
+          request.setMethod(HTTPVerb.POST);
+          request.setUrl(resourceType);
+        }
+
+        if (writeback != null && !writeback.isEmpty()) {
+          Map<String, Object> writebackMapping =
+                  createFhirPathMapping(writeback, bundle, createdResource, person, fjContext);
+
+          CustomFHIRPathResourceGeneratorR4<Resource> writebackGenerator =
+                  new CustomFHIRPathResourceGeneratorR4<>();
+          writebackGenerator.setMapping(writebackMapping);
+          writebackGenerator.setResource((Resource) basedOnItem);
+
+          writebackGenerator.generateResource((Class<? extends Resource>) basedOnItem.getClass());
+        }
+      }
+    }
+  }
+
+  /**
+   * Create new resources to add to the Bundle, either a single resource or a resource based on
+   * other instances of existing resources. Fields on the resource as well as the "based on"
+   * resource will be set based on rules.
+   *
+   * @param bundle Bundle to add resources to
+   * @param resourcesToCreate List of rules. Rules include a "resourceType", optionally a "based_on"
+   *     FHIRPath to select resources to base the new one off of, and "fields" which are "location"
+   *     and "value" pairs defining which field to set and what value.
+   * @param person Synthea person object to fetch values from (e.g, attributes). May be null
+   * @param index Patient Count.
+   * @param fjContext Javascript context for this run
+   */
+  public static void createResource(Bundle bundle, List<Map<String, Object>> resourcesToCreate,
+                                    Person person, FlexporterJavascriptContext fjContext, int index) {
+    // TODO: this is fundamentally similar to setValues, so extract common logic
+
+    for (Map<String, Object> newResourceDef : resourcesToCreate) {
+
+      String resourceType = (String) newResourceDef.get("resourceType");
+
+      String basedOnPath = null;
+      String basedOnState = null;
+      String basedOnModule = null;
+      String patientRange = null;
+      Map<String, Object> basedOn = (Map<String, Object>) newResourceDef.get("based_on");
+      if (basedOn != null) {
+        basedOnPath = (String) basedOn.get("resource");
+        basedOnState = (String) basedOn.get("state");
+        basedOnModule = (String) basedOn.get("module");
+        if (basedOn.containsKey("count")) {
+          patientRange = basedOn.get("count").toString();
+        }
+      }
+
+      if (patientRange != null) {
+        if (!isWithinRange(index + 1, patientRange.split("-"))) {
+//          System.out.println("Skipping "+resourceType+" for patient "+(index+1));
+          continue;
+        }
       }
 
       List<String> profiles = (List<String>) newResourceDef.get("profiles");
@@ -819,17 +1102,9 @@ public abstract class Actions {
     } else if (flag.equals("randomCode")) {
       return randomCode(flagValues[0]);
     } else if (flag.equals("multiRandomCode")) {
-      long len = bundle.getEntry().stream().takeWhile(entry -> !currentResource.getId().equals(entry.getResource().getId())).filter(entry -> entry.getResource().getResourceType().toString().equals(currentResource.getResourceType().toString())).count();
-      return multiRandomCode((int) len%flagValues.length, flagValues);
-    } else if (flag.equals("setValueField")){
-      long len = bundle.getEntry().stream().takeWhile(entry -> !currentResource.getId().equals(entry.getResource().getId())).filter(entry -> entry.getResource().getResourceType().toString().equals(currentResource.getResourceType().toString())).count();
-      return setValueField(currentResource, flagValues.length == 2 ? 0 : (int) len%(flagValues.length-1), flagValues[0], Arrays.copyOfRange(flagValues, 1, flagValues.length));
-    } else if (flag.equals("setMedicationField")){
-      long len = bundle.getEntry().stream().takeWhile(entry -> !currentResource.getId().equals(entry.getResource().getId())).filter(entry -> entry.getResource().getResourceType().toString().equals(currentResource.getResourceType().toString())).count();
-      return setMedicationField(bundle, currentResource, flagValues.length == 2 ? 0 : (int) len%(flagValues.length-1), flagValues[0], Arrays.copyOfRange(flagValues, 1, flagValues.length));
+      return multiRandomCode(flagValues);
     } else if (flag.equals("setHospitalization")){
-      long len = bundle.getEntry().stream().takeWhile(entry -> !currentResource.getId().equals(entry.getResource().getId())).filter(entry -> entry.getResource().getResourceType().toString().equals(currentResource.getResourceType().toString())).count();
-      return setHospitalization(currentResource, flagValues.length == 2 ? 0 : (int) len%(flagValues.length-1), flagValues[0], Arrays.copyOfRange(flagValues, 1, flagValues.length));
+      return setHospitalization(currentResource, flagValues[0], Arrays.copyOfRange(flagValues, 1, flagValues.length));
     }
 
     return null;
@@ -908,7 +1183,15 @@ public abstract class Actions {
   }
 
   private static Map<String, String> randomCode(String valueSetUrl) {
-    Code code = RandomCodeGenerator.getCode(valueSetUrl.strip(), (int) (Math.random() * Integer.MAX_VALUE));
+    Code code = new Code("", "", "");
+
+    List<String> values = valuesetMapping.get(valueSetUrl);
+    if (values == null) {
+      throw new RuntimeException(valueSetUrl + " CodeSystem Tag not found.");
+    }
+
+    code = RandomCodeGenerator.getCode(valueSetUrl.strip(), (int) (Math.random() * Integer.MAX_VALUE), code);
+
     return Map.of(
             "system", code.system,
             "code", code.code,
@@ -916,11 +1199,31 @@ public abstract class Actions {
   }
 
   private static class utilities {
-    static CodeableConcept codeableConcept(int index, String... values) {
-      CodeableConcept codeableConcept = new CodeableConcept();
-      Map<String, String> data = multiRandomCode(index, values);
-      codeableConcept.addCoding(new Coding().setCode(data.get("code")).setSystem(data.get("system")).setDisplay(data.get("display")));
-      return codeableConcept;
+    /**
+     * @param oid A string having a ValueSetOID
+     * @return True is the String matches the regular expression else False
+     */
+    public static boolean isValidOID(String oid) {
+      Pattern pattern = Pattern.compile("^(0|[1-9][0-9]*)(\\.(0|[1-9][0-9]*))*$");
+      Matcher matcher = pattern.matcher(oid);
+      return matcher.matches();
+    }
+
+    /**
+     * @param values An array of string having a valueset tags.
+     * @return A codeableConcept contain the data from the valueset tag.
+     */
+    static CodeableConcept codeableConcept(String... values) {
+      CodeableConcept codeableconcept = new CodeableConcept();
+      Map<String, String> mapped_coding = multiRandomCode(values);
+
+      Coding coding = new Coding()
+              .setCode(mapped_coding.get("code"))
+              .setSystem(mapped_coding.get("system"))
+              .setDisplay(mapped_coding.get("display"));
+
+      codeableconcept.addCoding(coding);
+      return codeableconcept;
     }
 
     static Reference reference(Bundle bundle, String value) {
@@ -957,71 +1260,42 @@ public abstract class Actions {
     }
   }
 
-  private static Map<String, String> multiRandomCode(int index, String... valueSetUrl) {
-
-    String urlString = valueSetUrl[index < valueSetUrl.length ? index : 0].strip();
-
+  private static Map<String, String> multiRandomCode(String... codeSystemTags) {
     Code code = new Code("", "", "");
+    List<String> codesystemList = new ArrayList<>();
 
-    if (urlString.contains(";")) {
-      String[] data = urlString.split(";");
-      if (data.length >= 2 && data.length <= 3) {
-        code = new Code(data[0], data[1], data.length == 3 ? data[2] : "");
+    for (String tag : codeSystemTags) {
+      String strippedTag = tag.strip();
+      List<String> values = valuesetMapping.get(strippedTag);
+      if (values == null) {
+        throw new RuntimeException(strippedTag + " CodeSystem Tag not found.");
       }
-    } else {
-      code = RandomCodeGenerator.getCode(urlString, (int) (Math.random() * Integer.MAX_VALUE));
+      codesystemList.addAll(values);
     }
-    assert code != null;
+
+    if (!codesystemList.isEmpty()) {
+      int randomIndex = new Random((int) (Math.random() * Integer.MAX_VALUE)).nextInt(codesystemList.size());
+      String urlString = codesystemList.get(randomIndex);
+
+      if (urlValidator.isValid(urlString)) {
+        code = RandomCodeGenerator.getCode(urlString, (int) (Math.random() * Integer.MAX_VALUE));
+      } else {
+        String[] data = urlString.split(",");
+        if (data.length >= 2) {
+          code = new Code(data[1], data[0], data.length == 3 ? data[2] : "");
+        }
+      }
+    }
+
     return Map.of(
             "system", code.system,
             "code", code.code,
             "display", code.display);
   }
 
-  private static Resource setValueField(Resource currentResource,Integer index, String field, String... values) {
-    switch (field.strip()) {
-      case "valueQuantity":
-        currentResource.setProperty("value[x]", utilities.setQuantity(values[index].split(";")));
-        break;
-      case "valueCodeableConcept":
-        currentResource.setProperty("value[x]", utilities.codeableConcept(index, values));
-        break;
-      case "valueString":
-        StringType str = new StringType(values[0].strip());
-        currentResource.setProperty("value[x]", str);
-        break;
-      case "valueBoolean":
-        BooleanType bool = new BooleanType(values[0].strip());
-        currentResource.setProperty("value[x]", bool);
-        break;
-      case "valueInteger":
-        IntegerType integer = new IntegerType(values[0].strip());
-        currentResource.setProperty("value[x]", integer);
-        break;
-      case "valueDateTime":
-        DateTimeType datetime = new DateTimeType(values[0].strip());
-        currentResource.setProperty("value[x]", datetime);
-        break;
-    }
-    return currentResource;
-  }
-
-  private static Resource setMedicationField(Bundle bundle, Resource currentResource, int index, String field, String... values) {
-    switch (field.strip()) {
-      case "medicationCodeableConcept":
-        currentResource.setProperty("medication[x]", utilities.codeableConcept(index, values));
-        break;
-      case "medicationReference":
-//        currentResource.setProperty("medication[x]", utilities.reference(bundle, values[index].strip()));
-        currentResource.setProperty("medication[x]", new Reference().setReference(findReference(bundle, "Medication")));
-        break;
-    }
-    return currentResource;
-  }
-
-  private static Resource setHospitalization(Resource currentResource, int index, String field, String... values) {
+  private static Resource setHospitalization(Resource currentResource, String field, String... values) {
     Encounter.EncounterHospitalizationComponent hospitalization = new Encounter.EncounterHospitalizationComponent();
-    CodeableConcept codeableConcept = utilities.codeableConcept(index, values);
+    CodeableConcept codeableConcept = utilities.codeableConcept(values);
     switch (field.strip()) {
       case "dischargeDisposition":
         hospitalization.setDischargeDisposition(codeableConcept);

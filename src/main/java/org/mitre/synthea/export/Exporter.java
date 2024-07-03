@@ -213,6 +213,48 @@ public abstract class Exporter {
 
   /**
    * Export a single patient, into all the formats supported. (Formats may be enabled or disabled by
+   * configuration)
+   *
+   * @param person   Patient to export
+   * @param stopTime Time at which the simulation stopped
+   * @param options Runtime exporter options
+   * @param index Index of the current patient count
+   */
+  public static boolean export(Person person, long stopTime, ExporterRuntimeOptions options, int index) {
+    boolean wasExported = false;
+    if (options.deferExports) {
+      wasExported = true;
+      deferredExports.add(new ImmutablePair<Person, Long>(person, stopTime));
+    } else {
+      if (options.yearsOfHistory > 0) {
+        person = filterForExport(person, options.yearsOfHistory, stopTime);
+      }
+      if (!person.alive(stopTime)) {
+        filterAfterDeath(person);
+      }
+      if (person.hasMultipleRecords) {
+        int i = 0;
+        for (String key : person.records.keySet()) {
+          person.record = person.records.get(key);
+          if (person.attributes.get(Person.ENTITY) != null) {
+            Entity entity = (Entity) person.attributes.get(Person.ENTITY);
+            Seed seed = entity.seedAt(person.record.lastEncounterTime());
+            Variant variant = seed.selectVariant(person);
+            person.attributes.putAll(variant.demographicAttributesForPerson());
+          }
+          boolean exported = exportRecord(person, Integer.toString(i), stopTime, options, index);
+          wasExported = wasExported || exported;
+          i++;
+        }
+      } else {
+        wasExported = exportRecord(person, "", stopTime, options, index);
+      }
+    }
+    return wasExported;
+  }
+
+  /**
+   * Export a single patient, into all the formats supported. (Formats may be enabled or disabled by
    * configuration). This method variant is only currently used by test classes.
    *
    * @param person   Patient to export
@@ -289,6 +331,199 @@ public abstract class Exporter {
               fjContext = new FlexporterJavascriptContext();
             }
             bundle = Actions.applyMapping(bundle, mapping, person, fjContext);
+          }
+        }
+      }
+
+      IParser parser = FhirR4.getContext().newJsonParser();
+      if (Config.getAsBoolean("exporter.fhir.bulk_data")) {
+        parser.setPrettyPrint(false);
+        for (org.hl7.fhir.r4.model.Bundle.BundleEntryComponent entry : bundle.getEntry()) {
+          String filename = entry.getResource().getResourceType().toString() + ".ndjson";
+          Path outFilePath = outDirectory.toPath().resolve(filename);
+          String entryJson = parser.encodeResourceToString(entry.getResource());
+          appendToFile(outFilePath, entryJson);
+        }
+      } else {
+        parser.setPrettyPrint(true);
+        String bundleJson = parser.encodeResourceToString(bundle);
+        Path outFilePath = outDirectory.toPath().resolve(filename(person, fileTag, "json"));
+        writeNewFile(outFilePath, bundleJson);
+      }
+      FhirGroupExporterR4.addPatient((String) person.attributes.get(Person.ID));
+    }
+    if (Config.getAsBoolean("exporter.ccda.export")) {
+      String ccdaXml = CCDAExporter.export(person, stopTime);
+      File outDirectory = getOutputFolder("ccda", person);
+      Path outFilePath = outDirectory.toPath().resolve(filename(person, fileTag, "xml"));
+      writeNewFile(outFilePath, ccdaXml);
+    }
+    if (Config.getAsBoolean("exporter.json.export")) {
+      String json = JSONExporter.export(person);
+      File outDirectory = getOutputFolder("json", person);
+      Path outFilePath = outDirectory.toPath().resolve(filename(person, fileTag, "json"));
+      writeNewFile(outFilePath, json);
+    }
+    if (Config.getAsBoolean("exporter.csv.export")) {
+      try {
+        CSVExporter.getInstance().export(person, stopTime);
+      } catch (IOException e) {
+        e.printStackTrace();
+      }
+    }
+    if (Config.getAsBoolean("exporter.bfd.export")) {
+      try {
+        BB2RIFExporter exporter = BB2RIFExporter.getInstance();
+        wasExported = exporter.export(person, stopTime, options.yearsOfHistory);
+      } catch (IOException e) {
+        e.printStackTrace();
+      }
+    }
+    if (Config.getAsBoolean("exporter.cpcds.export")) {
+      try {
+        CPCDSExporter.getInstance().export(person, stopTime);
+      } catch (IOException e) {
+        e.printStackTrace();
+      }
+    }
+    if (Config.getAsBoolean("exporter.text.export")) {
+      try {
+        TextExporter.exportAll(person, fileTag, stopTime);
+      } catch (IOException e) {
+        e.printStackTrace();
+      }
+    }
+    if (Config.getAsBoolean("exporter.text.per_encounter_export")) {
+      try {
+        TextExporter.exportEncounter(person, stopTime);
+      } catch (IOException e) {
+        e.printStackTrace();
+      }
+    }
+    if (Config.getAsBoolean("exporter.symptoms.csv.export")) {
+      try {
+        SymptomCSVExporter.getInstance().export(person, stopTime);
+      } catch (IOException e) {
+        e.printStackTrace();
+      }
+    }
+    if (Config.getAsBoolean("exporter.symptoms.text.export")) {
+      try {
+        SymptomTextExporter.exportAll(person, fileTag, stopTime);
+      } catch (IOException e) {
+        e.printStackTrace();
+      }
+    }
+    if (Config.getAsBoolean("exporter.cdw.export")) {
+      try {
+        CDWExporter.getInstance().export(person, stopTime);
+      } catch (IOException e) {
+        e.printStackTrace();
+      }
+    }
+    if (Config.getAsBoolean("exporter.clinical_note.export")) {
+      File outDirectory = getOutputFolder("notes", person);
+      Path outFilePath = outDirectory.toPath().resolve(filename(person, fileTag, "txt"));
+      String consolidatedNotes = ClinicalNoteExporter.export(person);
+      writeNewFile(outFilePath, consolidatedNotes);
+    }
+
+    if (patientExporters != null && !patientExporters.isEmpty()) {
+      for (PatientExporter patientExporter : patientExporters) {
+        patientExporter.export(person, stopTime, options);
+      }
+    }
+
+    if (options.isQueueEnabled()) {
+      try {
+        switch (options.queuedFhirVersion()) {
+          case DSTU2:
+            options.recordQueue.put(FhirDstu2.convertToFHIRJson(person, stopTime));
+            break;
+          case STU3:
+            options.recordQueue.put(FhirStu3.convertToFHIRJson(person, stopTime));
+            break;
+          default:
+            options.recordQueue.put(FhirR4.convertToFHIRJson(person, stopTime));
+            break;
+        }
+      } catch (InterruptedException ie) {
+        // ignore
+      } catch (Exception e) {
+        e.printStackTrace();
+      }
+    }
+    return wasExported;
+  }
+
+  /**
+   * Export a single patient record, into all the formats supported.
+   * (Formats may be enabled or disabled by configuration)
+   *
+   * @param person   Patient to export, with Patient.record being set.
+   * @param fileTag  An identifier to tag the file with.
+   * @param stopTime Time at which the simulation stopped
+   * @param options Generator's record queue (may be null)
+   * @param index Index of the current patient
+   */
+  private static boolean exportRecord(Person person, String fileTag, long stopTime,
+                                      ExporterRuntimeOptions options, int index) {
+    boolean wasExported = true;
+    if (options.terminologyService) {
+      // Resolve any coded values within the record that are specified using a ValueSet URI.
+      ValueSetCodeResolver valueSetCodeResolver = new ValueSetCodeResolver(person);
+      valueSetCodeResolver.resolve();
+    }
+
+    if (Config.getAsBoolean("exporter.fhir_stu3.export")) {
+      File outDirectory = getOutputFolder("fhir_stu3", person);
+      if (Config.getAsBoolean("exporter.fhir.bulk_data")) {
+        org.hl7.fhir.dstu3.model.Bundle bundle = FhirStu3.convertToFHIR(person, stopTime);
+        IParser parser = FhirStu3.getContext().newJsonParser().setPrettyPrint(false);
+        for (org.hl7.fhir.dstu3.model.Bundle.BundleEntryComponent entry : bundle.getEntry()) {
+          String filename = entry.getResource().getResourceType().toString() + ".ndjson";
+          Path outFilePath = outDirectory.toPath().resolve(filename);
+          String entryJson = parser.encodeResourceToString(entry.getResource());
+          appendToFile(outFilePath, entryJson);
+        }
+      } else {
+        String bundleJson = FhirStu3.convertToFHIRJson(person, stopTime);
+        Path outFilePath = outDirectory.toPath().resolve(filename(person, fileTag, "json"));
+        writeNewFile(outFilePath, bundleJson);
+      }
+    }
+    if (Config.getAsBoolean("exporter.fhir_dstu2.export")) {
+      File outDirectory = getOutputFolder("fhir_dstu2", person);
+      if (Config.getAsBoolean("exporter.fhir.bulk_data")) {
+        ca.uhn.fhir.model.dstu2.resource.Bundle bundle = FhirDstu2.convertToFHIR(person, stopTime);
+        IParser parser = FhirDstu2.getContext().newJsonParser().setPrettyPrint(false);
+        for (ca.uhn.fhir.model.dstu2.resource.Bundle.Entry entry : bundle.getEntry()) {
+          String filename = entry.getResource().getResourceName() + ".ndjson";
+          Path outFilePath = outDirectory.toPath().resolve(filename);
+          String entryJson = parser.encodeResourceToString(entry.getResource());
+          appendToFile(outFilePath, entryJson);
+        }
+      } else {
+        String bundleJson = FhirDstu2.convertToFHIRJson(person, stopTime);
+        Path outFilePath = outDirectory.toPath().resolve(filename(person, fileTag, "json"));
+        writeNewFile(outFilePath, bundleJson);
+      }
+    }
+    if (Config.getAsBoolean("exporter.fhir.export")) {
+      File outDirectory = getOutputFolder("fhir", person);
+      org.hl7.fhir.r4.model.Bundle bundle = FhirR4.convertToFHIR(person, stopTime);
+
+      if (options.flexporterMappings != null) {
+        FlexporterJavascriptContext fjContext = null;
+
+        for (Mapping mapping : options.flexporterMappings) {
+          if (FhirPathUtils.appliesToBundle(bundle, mapping.applicability, mapping.variables)) {
+            if (fjContext == null) {
+              // only set this the first time it is actually used
+              // TODO: figure out how to silence the truffle warnings
+              fjContext = new FlexporterJavascriptContext();
+            }
+            bundle = Actions.applyMapping(bundle, mapping, person, fjContext, index);
           }
         }
       }

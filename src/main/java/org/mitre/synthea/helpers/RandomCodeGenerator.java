@@ -8,6 +8,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import javax.annotation.Nonnull;
@@ -41,6 +43,13 @@ public abstract class RandomCodeGenerator {
       + "/ValueSet/$expand?url=";
   public static Map<String, List<Code>> codeListCache = new HashMap<>();
   public static List<Code> selectedCodes = new ArrayList<>();
+//  private static class urlValidator {
+//    public static boolean isValid(String oid) {
+//      Pattern pattern = Pattern.compile("^(0|[1-9][0-9]*)(\\.(0|[1-9][0-9]*))*$");
+//      Matcher matcher = pattern.matcher(oid);
+//      return matcher.matches();
+//    }
+//  }
   private static UrlValidator urlValidator = new UrlValidator(UrlValidator.ALLOW_2_SLASHES);
   private static OkHttpClient client = new OkHttpClient();
 
@@ -114,6 +123,9 @@ public abstract class RandomCodeGenerator {
               .build();
       try {
         Response response = client.newCall(request).execute();
+        if (response.code() == 404) {
+          throw new RuntimeException("No data found for URL: "+valueSetUri);
+        }
         ResponseBody body = response.body();
         if (body != null) {
           IParser parser = FhirR4.getContext().newJsonParser();

@@ -12,10 +12,14 @@ import org.yaml.snakeyaml.constructor.Constructor;
 
 public class Mapping {
   public String name;
+  public String identifier;
+  public String template;
   public String applicability;
 
+  public List<Map<String, Object>> measure_meta;
+  public Map<String, String> valuesets;
+  public List<Map<String, Object>> queries;
   public Map<String, Object> variables;
-
   /**
    * Each action is a {@code Map>String,?>}. Nested fields within the YAML become ArrayLists and
    * LinkedHashMaps.
