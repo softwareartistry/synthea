@@ -17,7 +17,7 @@ public class Mapping {
   public String applicability;
 
   public List<Map<String, Object>> measure_meta;
-  public Map<String, String> valuesets;
+  public Map<String, Object> valuesets;
   public List<Map<String, Object>> queries;
   public Map<String, Object> variables;
   /**
@@ -33,9 +33,9 @@ public class Mapping {
    * @throws FileNotFoundException if the file doesn't exist
    */
   public static Mapping parseMapping(File mappingFile) throws FileNotFoundException {
-    InputStream selectorInputSteam = new FileInputStream(mappingFile);
+    InputStream selectorInputStream = new FileInputStream(mappingFile);
     Yaml yaml = new Yaml(new Constructor(Mapping.class));
 
-    return yaml.loadAs(selectorInputSteam, Mapping.class);
+    return yaml.loadAs(selectorInputStream, Mapping.class);
   }
 }

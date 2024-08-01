@@ -59,11 +59,39 @@ public abstract class Actions {
    * Store the provided valuesets into valuesetMapping variable.
    * @param valuesets List of Dictionary with Valueset Tag, ValuesetOID or code, system
    */
-  public static synchronized void loadValueSet(Map<String, String> valuesets) {
+  public static synchronized void loadValueSet(Map<String, Object> valuesets) {
     if (valuesetMapping.isEmpty() && valuesets != null) {
-      valuesets.forEach((key, value) ->
-              valuesetMapping.computeIfAbsent(key, k -> List.of(value.split(";")))
-      );
+      valuesets.forEach((key, value) -> {
+        if (value instanceof Map) {
+          ((Map<?, ?>) value).forEach((innerKey, innerValue) -> {
+            if (innerValue instanceof String) {
+              List<String> valuesList = Arrays.asList(((String) innerValue).split(";"));
+              valuesetMapping.merge((String) innerKey, new ArrayList<>(valuesList), (existingList, newList) -> {
+                Set<String> existingSet = new HashSet<>(existingList);
+                for (String newValue : newList) {
+                  if (!existingSet.contains(newValue)) {
+                    existingList.add(newValue);
+                    existingSet.add(newValue);
+                  }
+                }
+                return existingList;
+              });
+            }
+          });
+        } else if (value instanceof String) {
+          List<String> valuesList = Arrays.asList(((String) value).split(";"));
+          valuesetMapping.merge(key, new ArrayList<>(valuesList), (existingList, newList) -> {
+            Set<String> existingSet = new HashSet<>(existingList);
+            for (String newValue : newList) {
+              if (!existingSet.contains(newValue)) {
+                existingList.add(newValue);
+                existingSet.add(newValue);
+              }
+            }
+            return existingList;
+          });
+        }
+      });
       System.out.println("Loading the valueset table.");
     }
   }
@@ -1279,11 +1307,13 @@ public abstract class Actions {
 
       if (urlValidator.isValid(urlString)) {
         code = RandomCodeGenerator.getCode(urlString, (int) (Math.random() * Integer.MAX_VALUE));
-      } else {
+      } else if(urlString.contains(",")) {
         String[] data = urlString.split(",");
         if (data.length >= 2) {
           code = new Code(data[1], data[0], data.length == 3 ? data[2] : "");
         }
+      } else {
+        throw new RuntimeException("String: "+ urlString + " is not in a valid URL Format or not a valid CodeSystem.");
       }
     }
 
